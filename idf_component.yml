@@ -1,0 +1,7 @@
+dependencies:
+  idf:
+    version: ">=5.0.0"
+  esp32-owb:
+    git: https://github.com/DavidAntliff/esp32-owb.git
+  esp32-ds18b20:
+    git: https://github.com/DavidAntliff/esp32-ds18b20.git
