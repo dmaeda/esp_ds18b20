@@ -10,9 +10,21 @@
 #define DISCOVERY_RETRY_PERIOD (10000) // milliseconds
 #define DS18B20_TEMP_MIN_C   (-55.0f)
 #define DS18B20_TEMP_MAX_C   (125.0f)
+#define DS18B20_INVALID_READING_C (-100.0f)
+#define DS18B20_READ_RETRIES (3)
+#define DS18B20_RETRY_DELAY_MS (30)
 
 static const char *TAG = "esp_ds18b20";
-static float readings[MAX_DEVICES] = {0};
+static float readings[MAX_DEVICES] = {
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+};
 
 
 static SemaphoreHandle_t s_lock = NULL;
@@ -82,7 +94,9 @@ void esp_ds18b20_task(void *pvParameters)
         if (num_devices <= 0)
         {
             lock_take();
-            readings[0] = 0.0f;
+            for (int i = 0; i < MAX_DEVICES; ++i) {
+                readings[i] = DS18B20_INVALID_READING_C;
+            }
             lock_give();
             owb_uninitialize(owb);
             ESP_LOGW(TAG, "No DS18B20 devices detected; retrying in %d ms", DISCOVERY_RETRY_PERIOD);
@@ -205,8 +219,25 @@ void esp_ds18b20_task(void *pvParameters)
             lock_take();
             for (int i = 0; i < num_devices; ++i)
             {
-                float new_temp = 0.0f;
-                errors[i] = ds18b20_read_temp(devices[i], &new_temp);
+                float new_temp = DS18B20_INVALID_READING_C;
+                errors[i] = DS18B20_ERROR_DEVICE;
+
+                for (int attempt = 0; attempt < DS18B20_READ_RETRIES; ++attempt) {
+                    float candidate = DS18B20_INVALID_READING_C;
+                    DS18B20_ERROR read_err = ds18b20_read_temp(devices[i], &candidate);
+                    if (read_err == DS18B20_OK &&
+                        candidate >= DS18B20_TEMP_MIN_C &&
+                        candidate <= DS18B20_TEMP_MAX_C) {
+                        errors[i] = DS18B20_OK;
+                        new_temp = candidate;
+                        break;
+                    }
+
+                    errors[i] = read_err;
+                    if (attempt < (DS18B20_READ_RETRIES - 1)) {
+                        vTaskDelay(pdMS_TO_TICKS(DS18B20_RETRY_DELAY_MS));
+                    }
+                }
 
                 if (errors[i] == DS18B20_OK &&
                     new_temp >= DS18B20_TEMP_MIN_C &&
@@ -216,7 +247,10 @@ void esp_ds18b20_task(void *pvParameters)
                 }
                 else
                 {
-                    errors[i] = DS18B20_ERROR_DEVICE;
+                    // Keep previous valid sample if available, otherwise mark invalid.
+                    if (readings[i] < DS18B20_TEMP_MIN_C || readings[i] > DS18B20_TEMP_MAX_C) {
+                        readings[i] = DS18B20_INVALID_READING_C;
+                    }
                 }
             }
 
@@ -238,7 +272,7 @@ void esp_ds18b20_task(void *pvParameters)
 
 float esp_ds18b20_get_readings(int index){
     if (index < 0 || index >= num_devices) {
-        return -100.0f; // Invalid index, return an out-of-range value
+        return DS18B20_INVALID_READING_C; // Invalid index, return an out-of-range value
     }
 
     lock_take();

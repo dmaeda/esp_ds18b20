@@ -11,19 +11,13 @@
 
 #include "esp_log.h"
 
+#include "aquarium_board_pins.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if CONFIG_IDF_TARGET_ESP32
-    #define GPIO_DS18B20_0 (4)    
-#elif CONFIG_IDF_TARGET_ESP32C3
-    #define GPIO_DS18B20_0 (5)
-#else
-    #define GPIO_DS18B20_0 (4)    
-#endif
-
-
+#define GPIO_DS18B20_0 AQUARIUM_GPIO_DS18B20_0
 
 void esp_ds18b20_task(void *pvParameters);
 float esp_ds18b20_get_readings(int index);
