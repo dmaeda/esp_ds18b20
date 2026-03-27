@@ -280,3 +280,12 @@ float esp_ds18b20_get_readings(int index){
     lock_give();
     return value;
 }
+
+int esp_ds18b20_get_device_count(void)
+{
+    int count = 0;
+    lock_take();
+    count = num_devices;
+    lock_give();
+    return count;
+}

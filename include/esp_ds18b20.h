@@ -21,6 +21,7 @@ extern "C" {
 
 void esp_ds18b20_task(void *pvParameters);
 float esp_ds18b20_get_readings(int index);
+int esp_ds18b20_get_device_count(void);
 
 #endif // ESP_DS18B20_H
 #ifdef __cplusplus
