@@ -2,6 +2,7 @@
 #include "owb.h"
 #include "owb_gpio.h"
 #include "ds18b20.h"
+#include <time.h>
 
 //#define GPIO_DS18B20_0       (5)
 #define MAX_DEVICES          (8)
@@ -26,6 +27,21 @@ static float readings[MAX_DEVICES] = {
     DS18B20_INVALID_READING_C,
 };
 
+// Stuck detection: track last reading and consecutive identical readings
+static float last_readings[MAX_DEVICES] = {
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+    DS18B20_INVALID_READING_C,
+};
+static int consecutive_identical_readings[MAX_DEVICES] = {0};
+static int64_t last_identical_reset_time[MAX_DEVICES] = {0};  // timestamp in seconds when identical reading counter was reset
+
+#define DS18B20_STUCK_THRESHOLD_SECONDS (30 * 60)  // 30 minutes - if same reading for 30+ minutes, it's stuck
 
 static SemaphoreHandle_t s_lock = NULL;
 static int num_devices = 0;
@@ -244,6 +260,15 @@ void esp_ds18b20_task(void *pvParameters)
                     new_temp <= DS18B20_TEMP_MAX_C)
                 {
                     readings[i] = new_temp;
+                    
+                    // Stuck detection: Check if this reading is identical to the last one
+                    if (readings[i] == last_readings[i]) {
+                        consecutive_identical_readings[i]++;
+                    } else {
+                        consecutive_identical_readings[i] = 1;
+                        last_identical_reset_time[i] = time(NULL);
+                    }
+                    last_readings[i] = readings[i];
                 }
                 else
                 {
@@ -251,6 +276,8 @@ void esp_ds18b20_task(void *pvParameters)
                     if (readings[i] < DS18B20_TEMP_MIN_C || readings[i] > DS18B20_TEMP_MAX_C) {
                         readings[i] = DS18B20_INVALID_READING_C;
                     }
+                    consecutive_identical_readings[i] = 0;
+                    last_identical_reset_time[i] = time(NULL);
                 }
             }
 
@@ -262,7 +289,15 @@ void esp_ds18b20_task(void *pvParameters)
                     ++errors_count[i];
                 }
 
-                ESP_LOGI(TAG, "Sensor %d: %.1f C (%d errors)", i, readings[i], errors_count[i]);
+                // Log stuck detection info if reading is identical for extended period
+                int64_t current_time = time(NULL);
+                int64_t time_elapsed = current_time - last_identical_reset_time[i];
+                if (time_elapsed > DS18B20_STUCK_THRESHOLD_SECONDS) {
+                    ESP_LOGW(TAG, "Sensor %d: STUCK reading %.1f C for %lld seconds (%d identical samples, %d errors)", 
+                            i, readings[i], time_elapsed, consecutive_identical_readings[i], errors_count[i]);
+                } else {
+                    ESP_LOGI(TAG, "Sensor %d: %.1f C (%d errors)", i, readings[i], errors_count[i]);
+                }
             }
             lock_give();
             vTaskDelayUntil(&last_wake_time, SAMPLE_PERIOD / portTICK_PERIOD_MS);
@@ -288,4 +323,44 @@ int esp_ds18b20_get_device_count(void)
     count = num_devices;
     lock_give();
     return count;
+}
+
+int64_t esp_ds18b20_get_stuck_duration_seconds(int index)
+{
+    if (index < 0 || index >= num_devices) {
+        return -1;  // Invalid index
+    }
+
+    lock_take();
+    int64_t current_time = time(NULL);
+    int64_t duration = current_time - last_identical_reset_time[index];
+    lock_give();
+    return duration;
+}
+
+bool esp_ds18b20_is_reading_stuck(int index)
+{
+    if (index < 0 || index >= num_devices) {
+        return false;  // Invalid index
+    }
+
+    lock_take();
+    int64_t current_time = time(NULL);
+    int64_t duration = current_time - last_identical_reset_time[index];
+    bool is_stuck = (duration > DS18B20_STUCK_THRESHOLD_SECONDS);
+    lock_give();
+    return is_stuck;
+}
+
+esp_err_t esp_ds18b20_reset_stuck_counter(int index)
+{
+    if (index < 0 || index >= num_devices) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    lock_take();
+    consecutive_identical_readings[index] = 0;
+    last_identical_reset_time[index] = time(NULL);
+    lock_give();
+    return ESP_OK;
 }
